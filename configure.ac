@@ -40,35 +40,66 @@ AC_ARG_WITH([unit-tests],
  [UNIT_TESTS=$withval])
 
 # Mono
+
 SHAMROCK_CHECK_MONO_MODULE(2.10.0)
-SHAMROCK_FIND_MONO_2_0_COMPILER
-SHAMROCK_FIND_MONO_4_0_COMPILER
 SHAMROCK_FIND_MONO_RUNTIME
 SHAMROCK_FIND_PROGRAM_OR_BAIL(GACUTIL, gacutil)
 SHAMROCK_FIND_PROGRAM_OR_BAIL(SN, sn)
-SHAMROCK_CHECK_MONO_2_0_GAC_ASSEMBLIES([        
-        System.Core
-	System.Configuration
-	System.Data
-	System.Web
-	Mono.Posix
-	Mono.Security
-])
-SHAMROCK_CHECK_MONO_4_0_GAC_ASSEMBLIES([        
-        System.Core
-	System.Configuration
-	System.Data
-	System.Web
-	Mono.Posix
-	Mono.Security
-])
 
-SAVED_DMCS="$DMCS"
-SAVED_GMCS="$GMCS"
+AC_MSG_CHECKING([for Mono 2.0 profile])
+if test -e "$($PKG_CONFIG --variable=libdir mono)/mono/2.0/System.dll"; then
+	AC_MSG_RESULT([found])
+	HAVE_MONO_2_0=yes
+fi
+
+AC_MSG_CHECKING([for Mono 4.5 profile])
+if test -e "$($PKG_CONFIG --variable=libdir mono)/mono/4.5/System.dll"; then
+	AC_MSG_RESULT([found])
+	HAVE_MONO_4_5=yes
+fi
+
+if test "x$HAVE_MONO_2_0" = "xyes" ; then
+ SHAMROCK_FIND_MONO_2_0_COMPILER
+ SHAMROCK_CHECK_MONO_2_0_GAC_ASSEMBLIES([        
+        System.Core
+	System.Configuration
+	System.Data
+	System.Web
+	Mono.Posix
+	Mono.Security
+ ])
+fi
+
+if test "x$HAVE_MONO_4_5" = "xyes" ; then
+ SHAMROCK_FIND_MONO_4_5_COMPILER
+ SHAMROCK_CHECK_MONO_4_5_GAC_ASSEMBLIES([        
+        System.Core
+	System.Configuration
+	System.Data
+	System.Web
+	Mono.Posix
+	Mono.Security
+ ])
+ DMCS="$MCS"
+ GMCS="$MCS -sdk:2"
+else
+ SHAMROCK_FIND_MONO_4_0_COMPILER
+ SHAMROCK_CHECK_MONO_4_0_GAC_ASSEMBLIES([        
+        System.Core
+	System.Configuration
+	System.Data
+	System.Web
+	Mono.Posix
+	Mono.Security
+ ])
+fi
 
 if test "x$RUNTIME" = "x" ; then
    RUNTIME="$MONO"
 fi
+
+SAVED_DMCS="$DMCS"
+SAVED_GMCS="$GMCS"
 
 CS="C#"
 if test "x$GMCS" = "xno" -a "x$DMCS" = "xno" ; then
@@ -186,22 +217,22 @@ SHAVE_INIT([build/m4/shave], [enable])
 AC_OUTPUT
 
 TARGET_FRAMEWORKS=""
-if test "x$SAVED_GMCS" = "xno"; then
-   GMCS_STRING="not found"
-else
+if test "x$HAVE_MONO_2_0" = "xyes"; then
    GMCS_STRING="$SAVED_GMCS"
    TARGET_FRAMEWORKS=".NET 2.0"
+else
+   GMCS_STRING="not found"
 fi
 
-if test "x$SAVED_DMCS" = "xno"; then
-   DMCS_STRING="not found"
-else
+if test "x$HAVE_MONO_4_5" = "xyes"; then
    DMCS_STRING="$SAVED_DMCS"
    if test -n "$TARGET_FRAMEWORKS"; then
       TARGET_FRAMEWORKS="$TARGET_FRAMEWORKS, .NET 4.0"
    else
       TARGET_FRAMEWORKS=".NET 4.0"
    fi
+else
+   DMCS_STRING="not found"
 fi
 
 cat <<EOF
