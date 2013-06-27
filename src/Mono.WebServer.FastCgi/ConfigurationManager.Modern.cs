@@ -1,10 +1,9 @@
-﻿//
+//
 // ConfigurationManager.cs: Generic multi-source configuration manager.
 //
 // Author:
 //   Brian Nickel (brian.nickel@gmail.com)
 //   Robert Jordan <robertj@gmx.net>
-//   Leonardo Taglialegne <leonardo.taglialegne@gmail.com>
 //
 // Copyright (C) 2007 Brian Nickel
 // 
@@ -29,60 +28,35 @@
 //
 
 using System;
-using System.IO;
-using System.Reflection;
-using System.Xml;
 using Mono.WebServer.Options;
 
-namespace Mono.WebServer {
-	[Obsolete]
-	public class ConfigurationManager
+namespace Mono.WebServer.FastCgi {
+	public partial class ConfigurationManager : Options.ConfigurationManager 
 	{
-		readonly FastCgi.ConfigurationManager configurationManager = new FastCgi.ConfigurationManager ();
-
-		public ConfigurationManager (Assembly asm, string resource)
+		[Obsolete]
+		internal void SetValue (string name, object value)
 		{
-			if (asm == null)
-				throw new ArgumentNullException ("asm");
-			if (resource == null)
-				throw new ArgumentNullException ("resource");
-
-			var doc = new XmlDocument ();
-			Stream stream = asm.GetManifestResourceStream (resource);
-			if (stream != null)
-				doc.Load (stream);
-			configurationManager.ImportSettings (doc, false, SettingSource.Xml);
-		}
-
-		public bool Contains (string name)
-		{
-			return configurationManager.Contains (name);
+			Settings[name].MaybeParseUpdate (SettingSource.CommandLine, value.ToString ());
 		}
 
 		[Obsolete]
-		public object this [string name] {
-			get {
-				return configurationManager.GetSetting (name).Value;
-			}
-			
-			set {
-				configurationManager.SetValue (name, value);
-			}
+		internal ISetting GetSetting (string name)
+		{
+			return Settings [name];
 		}
 
-		public void PrintHelp ()
+		[Obsolete]
+		internal bool Contains (string name)
 		{
-			configurationManager.PrintHelp ();
+			return Settings.Contains (name);
 		}
 
-		public void LoadCommandLineArgs (string[] args)
-		{
-			configurationManager.LoadCommandLineArgs (args);
+		protected override string Name {
+			get { return "mono-fastcgi"; }
 		}
 
-		public void LoadXmlConfig (string filename)
-		{
-			configurationManager.LoadXmlConfig (filename);
+		protected override string Description {
+			get { return "A FastCgi interface for ASP.NET applications."; }
 		}
 	}
 }
