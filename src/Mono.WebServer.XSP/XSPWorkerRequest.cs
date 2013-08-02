@@ -36,16 +36,15 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Web;
 using System.Runtime.InteropServices;
+using Mono.WebServer.Log;
 
 namespace Mono.WebServer
 {
-	[Obsolete ("This class should not be used. It will be removed from Mono.WebServer.dll")]
 	public class XSPWorkerRequest : MonoWorkerRequest
 	{
 		readonly string verb;
@@ -98,15 +97,8 @@ namespace Mono.WebServer
 			if (att.Length > 0)
 				title = ((AssemblyTitleAttribute) att [0]).Title;
 
-			var platform = (int) Environment.OSVersion.Platform;
-			string plat;
-			if (platform == 4 || platform == 6 || platform == 128)
-				plat = "Unix";
-			else
-				plat = ((PlatformID) platform).ToString ();
-
 			server_software = String.Format ("{0}/{1}", title, version); 
-			serverHeader = String.Format ("\r\nServer: {0} {1}\r\n", server_software, plat);
+			serverHeader = String.Format ("\r\nServer: {0} {1}\r\n", server_software, Platform.Name);
 
 			
 			try {
@@ -114,7 +106,8 @@ namespace Mono.WebServer
 
 				SetDefaultIndexFiles (indexes);
 			} catch (Exception ex) {
-				Console.WriteLine ("Worker initialization exception occurred. Continuing anyway:\n{0}", ex);
+				Logger.Write (LogLevel.Error, "Worker initialization exception occurred. Continuing anyway:");
+				Logger.Write (ex);
 			}
 		}
 
@@ -276,8 +269,7 @@ namespace Mono.WebServer
 		{
 			try {
 				string line;
-				headers = new Hashtable (CaseInsensitiveHashCodeProvider.DefaultInvariant,
-							CaseInsensitiveComparer.DefaultInvariant);
+				headers = new Hashtable (StringComparer.InvariantCultureIgnoreCase);
 				while ((line = ReadLine ()) != null && line.Length > 0) {
 					int colon = line.IndexOf (':');
 					if (colon == -1 || line.Length < colon + 2)
@@ -496,7 +488,7 @@ namespace Mono.WebServer
 			string ip = GetRemoteAddress ();
 			string name;
 			try {
-				IPHostEntry entry = Dns.GetHostByName (ip);
+				IPHostEntry entry = Dns.GetHostEntry (ip);
 				name = entry.HostName;
 			} catch {
 				name = ip;

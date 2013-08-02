@@ -33,10 +33,13 @@ using System;
 using System.Net;
 using System.Reflection;
 using Mono.FastCgi;
+using Mono.WebServer.Log;
+using Mono.WebServer.Options;
+using System.Timers;
 
 namespace Mono.WebServer.FastCgi
 {
-	public class Server
+	public static class Server
 	{
 		delegate bool SocketCreator (ConfigurationManager configmanager, string [] socketParts, out Socket socket);
 
@@ -60,7 +63,7 @@ namespace Mono.WebServer.FastCgi
 			if (configurationManager.Help) {
 				configurationManager.PrintHelp ();
 #if DEBUG
-				Console.WriteLine("Press any key...");
+				Console.WriteLine ("Press any key...");
 				Console.ReadKey ();
 #endif
 				return 0;
@@ -72,44 +75,45 @@ namespace Mono.WebServer.FastCgi
 				return 0;
 			}
 
-			// Enable console logging during Main ().
-			Logger.WriteToConsole = true;
-
-			if (!LoadConfigFile(configurationManager))
+			if (!configurationManager.LoadConfigFile ())
 				return 1;
+
+			configurationManager.SetupLogger ();
 
 #if DEBUG
 			// Log everything while debugging
 			Logger.Level = LogLevel.All;
 #endif
 
-			SetLogLevel(configurationManager);
-
-			OpenLogFile (configurationManager);
-
 			Logger.Write (LogLevel.Debug,
 				Assembly.GetExecutingAssembly ().GetName ().Name);
 
-
-			Socket socket;
-			if (!CreateSocket (configurationManager, out socket))
-				return 1;
-
 			string root_dir;
-			if (!GetRootDirectory (configurationManager, out root_dir))
+			if (!TryGetRootDirectory (configurationManager, out root_dir))
 				return 1;
 
 			CreateAppServer (configurationManager, root_dir);
 
-			if (!LoadApplicationsConfig (configurationManager))
+			if (!TryLoadApplicationsConfig (configurationManager))
 				return 1;
 
-			Mono.FastCgi.Server server = CreateServer (configurationManager, socket);
+			IServer server;
 
-			Logger.WriteToConsole = configurationManager.PrintLog;
+			if (configurationManager.OnDemand) {
+				Socket socket;
+				if (!TryCreateUnixSocket (configurationManager.OnDemandSock, out socket))
+					return 1;
+				server = CreateOnDemandServer (configurationManager, socket);
+				CreateWatchdog (configurationManager, server);
+			} else {
+				Socket socket;
+				if (!TryCreateSocket (configurationManager, out socket))
+					return 1;
+				server = new ServerProxy(CreateServer (configurationManager, socket));
+			}
 
 			var stoppable = configurationManager.Stoppable;
-			server.Start (stoppable);
+			server.Start (stoppable, (int)configurationManager.Backlog);
 			
 			if (stoppable) {
 				Console.WriteLine (
@@ -121,24 +125,110 @@ namespace Mono.WebServer.FastCgi
 			return 0;
 		}
 
-		static Mono.FastCgi.Server CreateServer (ConfigurationManager configurationManager,
-		                                         Socket socket)
+		static void CreateWatchdog (ConfigurationManager configurationManager, IServer server)
 		{
-			var server = new Mono.FastCgi.Server (socket);
+			using (var aliveLock = new System.Threading.ReaderWriterLockSlim ()) {
+				bool alive = false;
+
+				// On a new connection try to set alive to true
+				// If we can't then don't bother, it's not needed
+				server.RequestReceived += (sender, e) => {
+					TryRunLocked (
+						() => aliveLock.TryEnterWriteLock (0),
+						() => {	alive = true; },
+						aliveLock.ExitWriteLock
+					);
+				};
+
+				var pluto = new Watchdog (configurationManager.IdleTime * 1000);
+				pluto.End += (sender, e) => {
+					Logger.Write (LogLevel.Debug, "The dog bit!");
+					server.Stop ();
+				};
+
+				// Check every second for hearthbeats
+				var t = new Timer (1000);
+				t.Elapsed += (sender, e) => {
+					RunLocked (
+						aliveLock.EnterUpgradeableReadLock,
+						() => {
+							if (!alive)
+								return;
+							RunLocked(
+								aliveLock.EnterWriteLock,
+								() => { alive = false; },
+								aliveLock.ExitWriteLock
+							);
+							pluto.Kick ();
+						},
+						aliveLock.ExitUpgradeableReadLock
+					);
+				};
+				t.Start ();
+			}
+		}
+
+		static void RunLocked (Action takeLock, Action code, Action releaseLock)
+		{
+			if (takeLock == null)
+				throw new ArgumentNullException ("takeLock");
+			if (code == null)
+				throw new ArgumentNullException ("code");
+			if (releaseLock == null)
+				throw new ArgumentNullException ("releaseLock");
+			TryRunLocked (() => {takeLock (); return true;}, code, releaseLock);
+		}
+
+		static void TryRunLocked (Func<bool> takeLock, Action code, Action releaseLock)
+		{
+			if (takeLock == null)
+				throw new ArgumentNullException ("takeLock");
+			if (code == null)
+				throw new ArgumentNullException ("code");
+			if (releaseLock == null)
+				throw new ArgumentNullException ("releaseLock");
+			bool locked = false;
+			try {
+				if (!takeLock ())
+					return;
+				locked = true;
+				code ();
+			} finally {
+				if (locked)
+					releaseLock ();
+			}
+		}
+
+		static IServer CreateOnDemandServer (ConfigurationManager configurationManager, Socket socket)
+		{
+			var server = new OnDemandServer (socket) {
+				MaxConnections = configurationManager.MaxConns,
+				MaxRequests = configurationManager.MaxReqs,
+				MultiplexConnections = configurationManager.Multiplex
+			};
 
 			server.SetResponder (typeof (Responder));
 
-			server.MaxConnections = configurationManager.MaxConns;
-			server.MaxRequests = configurationManager.MaxReqs;
-			server.MultiplexConnections = configurationManager.Multiplex;
+			Logger.Write (LogLevel.Debug, "Max connections: {0}",       server.MaxConnections);
+			Logger.Write (LogLevel.Debug, "Max requests: {0}",          server.MaxRequests);
+			Logger.Write (LogLevel.Debug, "Multiplex connections: {0}", server.MultiplexConnections);
+			return server;
+		}
 
-			Logger.Write (LogLevel.Debug, "Max connections: {0}",
-				server.MaxConnections);
-			Logger.Write (LogLevel.Debug, "Max requests: {0}",
-				server.MaxRequests);
-			Logger.Write (LogLevel.Debug,
-				"Multiplex connections: {0}",
-				server.MultiplexConnections);
+		static Mono.FastCgi.Server CreateServer (ConfigurationManager configurationManager,
+		                                         Socket socket)
+		{
+			var server = new Mono.FastCgi.Server (socket) {
+				MaxConnections = configurationManager.MaxConns,
+				MaxRequests = configurationManager.MaxReqs,
+				MultiplexConnections = configurationManager.Multiplex
+			};
+
+			server.SetResponder (typeof (Responder));
+
+			Logger.Write (LogLevel.Debug, "Max connections: {0}",       server.MaxConnections);
+			Logger.Write (LogLevel.Debug, "Max requests: {0}",          server.MaxRequests);
+			Logger.Write (LogLevel.Debug, "Multiplex connections: {0}", server.MultiplexConnections);
 			return server;
 		}
 
@@ -151,7 +241,7 @@ namespace Mono.WebServer.FastCgi
 			};
 		}
 
-		static bool LoadApplicationsConfig (ConfigurationManager configurationManager)
+		static bool TryLoadApplicationsConfig (ConfigurationManager configurationManager)
 		{
 			bool autoMap = false; //(bool) configurationManager ["automappaths"];
 
@@ -190,7 +280,7 @@ namespace Mono.WebServer.FastCgi
 			return true;
 		}
 
-		static bool CreateSocket (ConfigurationManager configurationManager, out Socket socket)
+		public static bool TryCreateSocket (ConfigurationManager configurationManager, out Socket socket)
 		{
 			socket = null;
 
@@ -200,33 +290,38 @@ namespace Mono.WebServer.FastCgi
 
 			string[] socket_parts = socket_type.Split (new[] {':'}, 3);
 
-			SocketCreator creator = GetSocketCreator (socket_parts);
-			return creator != null && creator (configurationManager, socket_parts, out socket);
+			SocketCreator creator;
+			return TryGetSocketCreator (socket_parts, out creator)
+				&& creator (configurationManager, socket_parts, out socket);
 		}
 
-		static SocketCreator GetSocketCreator (string[] socket_parts)
+		static bool TryGetSocketCreator (string[] socket_parts, out SocketCreator creator)
 		{
 			switch (socket_parts [0].ToLower ()) {
 			case "pipe":
-				return CreatePipe;
+				creator = TryCreatePipe;
+				return true;
 				// The FILE sockets is of the format
 				// "file[:PATH]".
 			case "unix":
 			case "file":
-				return CreateUnixSocket;
+				creator = TryCreateUnixSocket;
+				return true;
 				// The TCP socket is of the format
 				// "tcp[[:ADDRESS]:PORT]".
 			case "tcp":
-				return CreateTcpSocket;
+				creator = TryCreateTcpSocket;
+				return true;
 			default:
 				Logger.Write (LogLevel.Error,
 				              "Error in argument \"socket\". \"{0}\" is not a supported type. Use \"pipe\", \"tcp\" or \"unix\".",
 				              socket_parts [0]);
-				return null;
+				creator = null;
+				return false;
 			}
 		}
 
-		static bool GetRootDirectory (ConfigurationManager configurationManager,
+		static bool TryGetRootDirectory (ConfigurationManager configurationManager,
 		                              out string rootDir)
 		{
 			rootDir = configurationManager.Root;
@@ -244,7 +339,7 @@ namespace Mono.WebServer.FastCgi
 			return true;
 		}
 
-		static bool CreateTcpSocket (ConfigurationManager configurationManager, string[] socketParts, out Socket socket)
+		static bool TryCreateTcpSocket (ConfigurationManager configurationManager, string[] socketParts, out Socket socket)
 		{
 			socket = null;
 			ushort port;
@@ -293,29 +388,32 @@ namespace Mono.WebServer.FastCgi
 			return true;
 		}
 
-		static bool CreateUnixSocket (ConfigurationManager configurationManager, string[] socketParts, out Socket socket)
+		static bool TryCreateUnixSocket (ConfigurationManager configurationManager, string[] socketParts, out Socket socket)
 		{
 			string path = socketParts.Length == 2
 				? socketParts[1]
 				: configurationManager.Filename;
 
-			socket = null;
+			return TryCreateUnixSocket (path, out socket);}
 
+		public static bool TryCreateUnixSocket (string path, out Socket socket)
+		{
+			socket = null;
 			try {
-				socket = SocketFactory.CreateUnixSocket (path);
-			} catch (System.Net.Sockets.SocketException e) {
-				Logger.Write (LogLevel.Error,
-					"Error creating the socket: {0}",
-					e.Message);
+				if (path.StartsWith ("\\0") && path.IndexOf ('\0', 1) < 0)
+					socket = SocketFactory.CreateUnixSocket ('\0' + path.Substring (2));
+				else
+					socket = SocketFactory.CreateUnixSocket (path);
+			}
+			catch (System.Net.Sockets.SocketException e) {
+				Logger.Write (LogLevel.Error, "Error creating the socket: {0}", e.Message);
 				return false;
 			}
-
-			Logger.Write (LogLevel.Debug,
-				"Listening on file: {0}", path);
+			Logger.Write (LogLevel.Debug, "Listening on file: {0}", path);
 			return true;
 		}
 
-		static bool CreatePipe (ConfigurationManager configurationManager, string[] socketParts, out Socket socket)
+		static bool TryCreatePipe (ConfigurationManager configurationManager, string[] socketParts, out Socket socket)
 		{
 			socket = null;
 			try {
@@ -332,54 +430,6 @@ namespace Mono.WebServer.FastCgi
 			} catch (NotSupportedException) {
 				Logger.Write (LogLevel.Error,
 					"Error: Pipe sockets are not supported on this system.");
-				return false;
-			}
-			return true;
-		}
-
-		static void OpenLogFile (ConfigurationManager configurationManager)
-		{
-			try {
-				var log_file = configurationManager.LogFile;
-
-				if (log_file != null)
-					Logger.Open (log_file);
-			} catch (Exception e) {
-				Logger.Write (LogLevel.Error,
-					"Error opening log file: {0}",
-					e.Message);
-				Logger.Write (LogLevel.Warning,
-					"Events will not be logged to file.");
-			}
-		}
-
-		static void SetLogLevel (ConfigurationManager configurationManager)
-		{
-			Logger.Level = configurationManager.LogLevels;
-		}
-
-		/// <summary>
-		/// If a configfile option was specified, tries to load
-		/// the configuration file
-		/// </summary>
-		/// <returns>false on failure, true on success or
-		/// option not present</returns>
-		static bool LoadConfigFile(ConfigurationManager configurationManager)
-		{
-			try {
-				var config_file = configurationManager.ConfigFile;
-				if (config_file != null)
-					configurationManager.LoadXmlConfig(config_file);
-			}
-			catch (ApplicationException e) {
-				Logger.Write(LogLevel.Error, e.Message);
-				return false;
-			}
-			catch (System.Xml.XmlException e)
-			{
-				Logger.Write(LogLevel.Error,
-					"Error reading XML configuration: {0}",
-					e.Message);
 				return false;
 			}
 			return true;

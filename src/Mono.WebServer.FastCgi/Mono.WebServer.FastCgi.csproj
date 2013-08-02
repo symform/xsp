@@ -65,6 +65,7 @@
     <Reference Include="System.Xml" />
     <Reference Include="System.Web" />
     <Reference Include="System.Configuration" />
+    <Reference Include="System.Core" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
@@ -76,7 +77,6 @@
     <Compile Include="Connection.cs" />
     <Compile Include="EndRequestBody.cs" />
     <Compile Include="ISocketAbstraction.cs" />
-    <Compile Include="Logger.cs" />
     <Compile Include="main.cs" />
     <Compile Include="NameValuePair.cs" />
     <Compile Include="Record.cs" />
@@ -84,6 +84,7 @@
     <Compile Include="Responder.cs" />
     <Compile Include="ResponderRequest.cs" />
     <Compile Include="Server.cs" />
+    <Compile Include="Server\ConnectionProxy.cs" />
     <Compile Include="SocketFactory.cs" />
     <Compile Include="StandardSocket.cs" />
     <Compile Include="Strings.cs" />
@@ -95,6 +96,23 @@
     <Compile Include="WorkerRequest.cs" />
     <Compile Include="AssemblyInfo.cs" />
     <Compile Include="DictionaryExtensions.cs" />
+    <Compile Include="Watchdog.cs" />
+    <Compile Include="BufferManager.cs" />
+    <Compile Include="RecordType.cs" />
+    <Compile Include="Compatibility\CompatArraySegment.cs" />
+    <Compile Include="Compatibility\IReadOnlyCollection.cs" />
+    <Compile Include="Compatibility\IReadOnlyList.cs" />
+    <Compile Include="Buffers.cs" />
+    <Compile Include="Server\GenericServer.cs" />
+    <Compile Include="Server\ServerProxy.cs" />
+    <Compile Include="Server\IConnection.cs" />
+    <Compile Include="Server\IServerCallback.cs" />
+    <Compile Include="Compatibility\ArrayExtensions.cs" />
+    <Compile Include="Server\IServer.cs" />
+    <Compile Include="Server\SocketPassing.cs" />
+    <Compile Include="Server\OnDemandServer.cs" />
+    <Compile Include="Server\FakeGenericServer.cs" />
+    <Compile Include="Server\IGenericServer.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Mono.WebServer\Mono.WebServer.csproj">
@@ -102,4 +120,6 @@
       <Name>Mono.WebServer</Name>
     </ProjectReference>
   </ItemGroup>
+  <ItemGroup />
+  <ItemGroup />
 </Project>

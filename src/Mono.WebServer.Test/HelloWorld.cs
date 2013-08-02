@@ -7,10 +7,10 @@ using System.Net;
 
 namespace Mono.WebServer.Test
 {
-	[TestFixture()]
+	[TestFixture]
 	public class HelloWorld
 	{
-		[SetUp()]
+		[SetUp]
 		public void Init ()
 		{
 			// Force loading of the XSP assembly
@@ -32,17 +32,7 @@ namespace Mono.WebServer.Test
 			if (assembly.GlobalAssemblyCache || assembly.CodeBase == null)
 				return;
 
-			var platform = Environment.OSVersion.Platform;
-			string cut;
-			// TODO: Write this in a portable way
-			switch (platform) {
-			case PlatformID.Unix:
-				cut = assembly.CodeBase.Substring (7);
-				break;
-			default:
-				cut = assembly.CodeBase.Substring (8);
-				break;
-			}
+			string cut = assembly.CodeBase.Substring (Platform.IsUnix ? 7 : 8);
 			string filename = Path.GetFileName (cut);
 
 			string target = Path.Combine (binpath, filename);

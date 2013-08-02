@@ -7,12 +7,11 @@ namespace Mono.WebServer.FastCgi {
 		public static string Server_ValueUnknown = "Unknown value, {0}, requested by client.";
 		public static string Server_Accepting = "Accepting an incoming connection.";
 		public static string Server_AcceptFailed = "Failed to accept connection. Reason: {0}";
-		public static string Server_ConnectionFailed = "Failed to process connection. Reason: {0}";
+		public static string Server_ConnectionFailed = "Failed to process connection.";
 		public static string Server_ConnectionClosed = "The FastCGI connection has been closed.";
 		public static string Server_ResponderDoesNotImplement = "Responder must implement the FastCgi.IResponder interface.";
 		public static string Server_ResponderLacksProperConstructor = "Responder must contain public constructor {0}(ResponderRequest)";
 		public static string Server_ResponderNotSupported = "Responder role is not supported.";
-		public static string Logger_Format = "[{0:u}] {1,-7} {2}";
 		public static string Connection_BeginningRun = "Beginning to receive records on connection.";
 		public static string Connection_EndingRun = "Finished receiving records on connection.";
 		public static string Connection_RecordNotReceived = "Failed to receive record.";
@@ -32,7 +31,7 @@ namespace Mono.WebServer.FastCgi {
 		public static string Record_DataTooBig = "Data exceeds 65535 bytes and cannot be stored.";
 		public static string Record_ToString = "FastCGI Record:\n   Version:        {0}\n   Type:           {0}\n   Request ID:     {0}\n   Content Length: {0}";
 		public static string BeginRequestBody_WrongType = "The record's type is not BeginRequest.";
-		public static string BeginRequestBody_WrongSize = "8 bytes expected.";
+		public static string BeginRequestBody_WrongSize = "8 bytes expected, got {0}.";
 		public static string UnmanagedSocket_NotSupported = "Unmanaged sockets not supported.";
 		public static string UnixSocket_AlreadyExists = "There's already a server listening on {0}";
 		public static string ResponderRequest_IncompleteInput = "Insufficient input data received. (Expected {0} bytes but got {1}.)";

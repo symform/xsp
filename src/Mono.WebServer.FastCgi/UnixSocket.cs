@@ -29,14 +29,14 @@
 //
 
 using System;
-using Mono.FastCgi;
 using Mono.Unix;
 using System.Globalization;
+using Mono.WebServer.Log;
 
 namespace Mono.WebServer.FastCgi {
 	class UnixSocket : StandardSocket, IDisposable {
 		string path;
-		readonly long inode;
+		readonly long? inode;
 		
 		protected UnixSocket (UnixEndPoint localEndPoint)
 			: base (System.Net.Sockets.AddressFamily.Unix,
@@ -49,7 +49,15 @@ namespace Mono.WebServer.FastCgi {
 		public UnixSocket (string path) : this (CreateEndPoint (path))
 		{
 			this.path = path;
-			inode = new UnixFileInfo (path).Inode;
+			try {
+				if (path.StartsWith("\0"))
+					inode = null;
+				else
+					inode = new UnixFileInfo (path).Inode;
+			} catch (InvalidOperationException) {
+				Logger.Write (LogLevel.Error, "Path \"{0}\" doesn't exist?", path);
+				throw;
+			}
 		}
 		
 		
@@ -84,20 +92,20 @@ namespace Mono.WebServer.FastCgi {
 		
 		public void Dispose ()
 		{
-                	if (path != null) {
-                		string f = path;
-                		path = null;
+			if (path != null) {
+				string f = path;
+				path = null;
 
-				if (System.IO.File.Exists (f) && inode == new UnixFileInfo (f).Inode) {
+				if (inode.HasValue && System.IO.File.Exists (f) && inode.Value == new UnixFileInfo (f).Inode) {
 					System.IO.File.Delete (f);
 				}
-                	}
+			}
 		}
-		
-                ~UnixSocket ()
-                {
-                	Dispose ();
-                }
+
+		~UnixSocket ()
+		{
+			Dispose ();
+		}
 	}
 }
 

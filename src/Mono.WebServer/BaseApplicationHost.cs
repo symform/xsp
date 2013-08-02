@@ -32,6 +32,7 @@ using System.Threading;
 using System.Web;
 using System.Web.Configuration;
 using System.Collections.Generic;
+using Mono.WebServer.Log;
 
 namespace Mono.WebServer
 {
@@ -94,11 +95,8 @@ namespace Mono.WebServer
 
 		protected void ProcessRequest (MonoWorkerRequest mwr)
 		{
-			// TODO: Check this, it looks like a bug
-			if (mwr == null) {
-				EndOfRequest (mwr);
-				return;
-			}
+			if (mwr == null)
+				throw new ArgumentNullException ("mwr");
 			
 			if (!mwr.ReadRequestData ()) {
 				EndOfRequest (mwr);
@@ -114,7 +112,7 @@ namespace Mono.WebServer
 				// we don't know what the request state is,
 				// better write the exception to the console
 				// than forget it.
-				Console.WriteLine ("Unhandled exception: {0}", ex);
+				Logger.Write(LogLevel.Error, "Unhandled exception: {0}", ex);
 				EndOfRequest (mwr);
 			}
 		}

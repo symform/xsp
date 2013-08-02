@@ -41,12 +41,15 @@ namespace Mono.WebServer.FastCgi {
 
 		readonly IntPtr socket;
 		bool connected;
-		
+
+		public override IntPtr Handle {
+			get { return socket; }
+		}
+
 		unsafe public UnmanagedSocket (IntPtr socket)
 		{
 			if (!supports_libc)
-				throw new NotSupportedException (
-					Strings.UnmanagedSocket_NotSupported);
+				throw new NotSupportedException (Strings.UnmanagedSocket_NotSupported);
 			
 			if ((int) socket < 0)
 				throw new ArgumentException ("Invalid socket.",
@@ -60,6 +63,30 @@ namespace Mono.WebServer.FastCgi {
 		
 		
 			this.socket = socket;
+		}
+
+		unsafe public UnmanagedSocket (IntPtr socket, bool connected)
+		{
+			if (!supports_libc)
+				throw new NotSupportedException (Strings.UnmanagedSocket_NotSupported);
+
+			if ((int) socket < 0)
+				throw new ArgumentException ("Invalid socket.", "socket");
+
+			var address = new byte [1024];
+			int size = 1024;
+			fixed (byte* ptr = address)
+				if (getsockname (socket, ptr, ref size) != 0)
+					throw GetException ();
+
+
+			this.socket = socket;
+			this.connected = connected;
+		}
+
+		public override void Connect ()
+		{
+			throw new NotImplementedException ();
 		}
 		
 		public override void Close ()

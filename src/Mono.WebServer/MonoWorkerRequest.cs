@@ -42,6 +42,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Web;
 using System.Web.Hosting;
+using Mono.WebServer.Log;
 
 namespace Mono.WebServer
 {	
@@ -393,11 +394,7 @@ namespace Mono.WebServer
 			} catch (Exception ex) {
 				inUnhandledException = true;
 				var hex = new HttpException (400, "Bad request", ex);
-				// TODO: Check, this looks like a bug
-				if (hex != null) // just a precaution
-					error = hex.GetHtmlErrorMessage ();
-				else
-					error = String.Format (DEFAULT_EXCEPTION_HTML, ex.Message);
+				error = hex.GetHtmlErrorMessage ();
 			}
 
 			if (!inUnhandledException)
@@ -420,8 +417,8 @@ namespace Mono.WebServer
 				SendResponseFromMemory (bytes, bytes.Length);
 				FlushResponse (true);
 			} catch (Exception ex) { // should "never" happen
-				Console.Write("Error while processing a request: ");
-				Console.WriteLine(ex.Message);
+				Logger.Write (LogLevel.Error, "Error while processing a request: ");
+				Logger.Write (ex);
 				throw;
 			}
 		}
@@ -473,6 +470,7 @@ namespace Mono.WebServer
 			while (length > 0 && (count = stream.Read (fileContent, 0, count)) != 0) {
 				SendResponseFromMemory (fileContent, count);
 				length -= count;
+				// Keep the System. prefix
 				count = (int) System.Math.Min (length, fileContent.Length);
 			}
 		}
@@ -522,7 +520,7 @@ namespace Mono.WebServer
 	 					if (client == null)
 	 						cert_issuer = String.Empty;
 	 					else
-	 						cert_issuer = client.GetIssuerName ();
+							cert_issuer = client.Issuer;
 	 				}
 	 				return cert_issuer;
 	 			case "CERT_SERIALNUMBER":
@@ -538,7 +536,7 @@ namespace Mono.WebServer
 	 					if (client == null)
 	 						cert_subject = String.Empty;
 	 					else
-	 						cert_subject = client.GetName ();
+							cert_subject = client.Subject;
 	 				}
 					return cert_subject;
 	 			}

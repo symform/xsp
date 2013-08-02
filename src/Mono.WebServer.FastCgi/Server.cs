@@ -27,48 +27,28 @@
 //
 
 using System;
-using System.Linq;
-using System.Threading;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using Mono.WebServer.FastCgi;
+using Mono.WebServer.Log;
 
 namespace Mono.FastCgi {
 	public class Server
 	{
+		public BufferManager BigBufferManager { get; private set; }
+		public BufferManager SmallBufferManager { get; private set; }
+
 		#region Private Fields
-		
-		readonly List<Connection> connections = new List<Connection> ();
-		
-		readonly Socket listen_socket;
-		
-		bool started;
-		
-		bool accepting;
-		
-		Thread runner;
-		
-		readonly object accept_lock = new object ();
-		
-		AsyncCallback accept_cb;
-		
-		int max_connections = Int32.MaxValue;
+
+		readonly IGenericServer<ConnectionProxy> backend;
 		
 		int max_requests = Int32.MaxValue;
 		
-		bool multiplex_connections;
-		
 		Type responder_type;
 		
-		byte [][] buffers = new byte [200][];
-		
-		int buffer_count;
-		
-		readonly object buffer_lock = new object ();
-		
 		#endregion
-		
-		
+
 		
 		#region Constructors
 		
@@ -76,8 +56,24 @@ namespace Mono.FastCgi {
 		{
 			if (socket == null)
 				throw new ArgumentNullException ("socket");
-			
-			listen_socket = socket;
+
+			BigBufferManager = new BufferManager (4 * 1024); //4k
+			SmallBufferManager = new BufferManager (8);
+
+			backend = new GenericServer<ConnectionProxy> (socket, new ServerProxy (this));
+			backend.RequestReceived += RequestReceived;
+		}
+
+		public Server (IGenericServer<ConnectionProxy> backend)
+		{
+			if (backend == null)
+				throw new ArgumentNullException ("backend");
+
+			BigBufferManager = new BufferManager (4 * 1024); //4k
+			SmallBufferManager = new BufferManager (8);
+
+			this.backend = backend;
+			backend.RequestReceived += RequestReceived;
 		}
 		
 		#endregion
@@ -85,17 +81,12 @@ namespace Mono.FastCgi {
 		
 		
 		#region Public Properties
+
+		public event EventHandler RequestReceived;
 		
 		public int MaxConnections {
-			get {return max_connections;}
-			set {
-				if (value < 1)
-					throw new ArgumentOutOfRangeException (
-						"value",
-						Strings.Server_MaxConnsOutOfRange);
-				
-				max_connections = value;
-			}
+			get { return backend.MaxConnections; }
+			set { backend.MaxConnections = value; }
 		}
 		
 		public int MaxRequests {
@@ -110,34 +101,25 @@ namespace Mono.FastCgi {
 			}
 		}
 		
-		public bool MultiplexConnections {
-			get {return multiplex_connections;}
-			set {multiplex_connections = value;}
-		}
+		public bool MultiplexConnections { get; set; }
 		
 		public bool CanAccept {
-			get {return started && ConnectionCount < max_connections;}
+			get {return backend.CanAccept; }
 		}
 		
 		public bool CanRequest {
-			get {return started && RequestCount < max_requests;}
+			get {return backend.Started && RequestCount < max_requests;}
 		}
 		
 		public int ConnectionCount {
 			get {
-				lock (connections)
-					return connections.Count;
+				return backend.ConnectionCount;
 			}
 		}
 		
 		public int RequestCount {
 			get {
-				int requests = 0;
-				lock (connections) {
-					requests += connections.Sum(c => c.RequestCount);
-				}
-				
-				return requests;
+				return backend.Connections.Sum(c => c.RequestCount);
 			}
 		}
 		
@@ -146,51 +128,34 @@ namespace Mono.FastCgi {
 		
 		
 		#region Public Methods
-		
-		public void Start (bool background)
+
+		internal ConnectionProxy OnAccept (Socket socket)
 		{
-			if (started)
-				throw new InvalidOperationException (
-					Strings.Server_AlreadyStarted);
-			
-			listen_socket.Listen (500);
-			
-			runner = new Thread (RunServer) {IsBackground = background};
-			runner.Start ();
+			return new ConnectionProxy (new Connection (socket, this));
 		}
 		
+		[Obsolete]
+		public void Start (bool background)
+		{
+			Start (background, 500);
+		}
+
+		public void Start (bool background, int backlog)
+		{
+			backend.Start (background, backlog);
+		}
+
+		/// <summary>
+		/// Stop this instance. Calling Stop multiple times is a no-op.
+		/// </summary>
 		public void Stop ()
 		{
-			if (!started)
-				throw new InvalidOperationException (
-					Strings.Server_NotStarted);
-
-			started = false;
-			listen_socket.Close ();
-			lock (connections) {
-				foreach (Connection c in new List<Connection> (connections)) {
-					EndConnection (c);
-				}
-			}
-			
-			runner.Abort ();
-			runner = null;
+			backend.Stop ();
 		}
 		
 		public void EndConnection (Connection connection)
 		{
-			if (connection == null)
-				throw new ArgumentNullException ("connection");
-			
-			connection.Stop ();
-
-			lock (connections) {
-				if (connections.Contains (connection))
-					connections.Remove (connection);
-			}
-			
-			if (!accepting && CanAccept)
-				BeginAccept ();
+			backend.EndConnection (new ConnectionProxy (connection));
 		}
 		
 		
@@ -210,8 +175,7 @@ namespace Mono.FastCgi {
 				switch (name)
 				{
 				case "FCGI_MAX_CONNS":
-					value = max_connections.ToString (
-						CultureInfo.InvariantCulture);
+					value = backend.MaxConnections.ToString (CultureInfo.InvariantCulture);
 				break;
 					
 				case "FCGI_MAX_REQS":
@@ -220,7 +184,7 @@ namespace Mono.FastCgi {
 				break;
 				
 				case "FCGI_MPXS_CONNS":
-					value = multiplex_connections ? "1" : "0";
+					value = MultiplexConnections ? "1" : "0";
 				break;
 				}
 				
@@ -236,174 +200,28 @@ namespace Mono.FastCgi {
 			
 			return pairs;
 		}
-		
+
+		[Obsolete("Use BigBufferManager or SmallBufferManager instead.")]
 		public void AllocateBuffers (out byte [] buffer1,
 		                             out byte [] buffer2)
 		{
-			
-			buffer1 = null;
-			buffer2 = null;
-			
-			lock (buffer_lock) {
-				// If there aren't enough existing buffers,
-				// create new ones.
-				if (buffer_count < 2)
-					buffer1 = new byte [Record.SuggestedBufferSize];
-				
-				if (buffer_count < 1)
-					buffer2 = new byte [Record.SuggestedBufferSize];
-				
-				// Now that buffer1 and buffer2 may have been
-				// assigned to compensate for a lack of buffers
-				// in the array, loop through and assign the
-				// remaining values.
-				int length = buffers.Length;
-				for (int i = 0; i < length && (buffer1 == null ||
-					buffer2 == null); i ++) {
-					if (buffers [i] != null) {
-						if (buffer1 == null)
-							buffer1 = buffers [i];
-						else
-							buffer2 = buffers [i];
-						
-						buffers [i] = null;
-						buffer_count --;
-					}
-				}
-			}
+			buffer1 = new byte[Record.SuggestedBufferSize];
+			buffer2 = new byte[Record.SuggestedBufferSize];
 		}
-		
+
+		[Obsolete("Use BigBufferManager or SmallBufferManager instead.")]
 		public void ReleaseBuffers (byte [] buffer1, byte [] buffer2)
 		{
-			lock (buffer_lock) {
-				int length = buffers.Length;
-				foreach (byte [] buffer in new[] {buffer1, buffer2}) {
-					if (buffer.Length < Record.SuggestedBufferSize)
-						continue;
-					
-					// If the buffer count is equal to the
-					// length of the buffer array, it needs
-					// to be enlarged.
-					if (buffer_count == length) {
-						var buffers_new = new byte [length + length / 3][];
-						buffers.CopyTo (buffers_new, 0);
-						buffers = buffers_new;
-						buffers [buffer_count++] = buffer;
-						
-						if (buffer == buffer1)
-							buffers [buffer_count++] = buffer2;
-						
-						return;
-					}
-					
-					for (int i = 0; i < length && buffer != null; i++) {
-						if (buffers [i] == null) {
-							buffers [i] = buffer;
-							buffer_count ++;
-							break;
-						}
-					}
-				}
-				
-			}
 		}
 		
 		#endregion
-		
-		
-		
-		#region Private Methods
-		
-		void RunServer ()
-		{
-			started = true;
-			accept_cb = OnAccept;
-			listen_socket.BeginAccept (accept_cb, null);
-			if (runner.IsBackground)
-				return;
-
-			while (true) // Just sleep until we're aborted.
-				Thread.Sleep (1000000);
-		}
-		
-		void OnAccept (IAsyncResult ares)
-		{
-			Logger.Write (LogLevel.Debug, Strings.Server_Accepting);
-			Connection connection = null;
-			
-			lock (accept_lock) {
-				accepting = false;
-			}
-			
-			try {
-				try {
-					Socket accepted = listen_socket.EndAccept (ares);
-					connection = new Connection (accepted, this);
-					lock (connections)
-						connections.Add (connection);
-				} catch (System.Net.Sockets.SocketException e) {
-					Logger.Write (LogLevel.Error,
-						Strings.Server_AcceptFailed, e.Message);
-					if (e.ErrorCode == 10022)
-						Stop ();
-				} catch (ObjectDisposedException) {
-					Logger.Write (LogLevel.Debug, Strings.Server_ConnectionClosed);
-					return; // Already done (e.g., shutdown)
-				}
-			
-				if (CanAccept)
-					BeginAccept ();
-			} catch (Exception e) {
-				Logger.Write (LogLevel.Error,
-					Strings.Server_AcceptFailed, e.Message);
-			}
-			
-			if (connection == null)
-				return;
-			try {
-				connection.Run ();
-			} catch (Exception e) {
-				Logger.Write (LogLevel.Error,
-					Strings.Server_ConnectionFailed, e.Message);
-				try {
-					// Upon catastrophic failure, forcefully stop 
-					// all remaining connection activity, since no 
-					// specific error-handling kicked in to rescue 
-					// the connection or its requests and the 
-					// connection's main loop has now terminated.
-					// This prevents abandoned FastCGI connections 
-					// from staying open indefinitely.
-					EndConnection(connection);
-					Logger.Write (LogLevel.Debug, Strings.Server_ConnectionClosed);
-				} catch {
-					// Ignore at this point -- too bad
-				}
-			}
-		}
-		
-		void BeginAccept ()
-		{
-			lock (accept_lock) {
-				if (accepting)
-					return;
-				
-				accepting = true;
-				listen_socket.BeginAccept (accept_cb, null);
-			}
-		}
-		
-		#endregion
-		
-		
 		
 		#region Responder Management
-		
+
 		public void SetResponder (Type responder)
 		{
-			if (responder == null) {
-				responder_type = responder;
-				return;
-			}
+			if (responder == null)
+				throw new ArgumentNullException ("responder");
 
 			if (!typeof (IResponder).IsAssignableFrom (responder))
 				throw new ArgumentException (

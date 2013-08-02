@@ -33,6 +33,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using Mono.WebServer.Log;
+using Mono.WebServer.Options;
 
 namespace Mono.WebServer.Apache {
 	public class Server : MarshalByRefObject {
@@ -40,29 +42,24 @@ namespace Mono.WebServer.Apache {
 		{
 			var ex = (Exception)e.ExceptionObject;
 
-			Console.Error.WriteLine ("Handling exception type {0}", ex.GetType ().Name);
-			Console.Error.WriteLine ("Message is {0}", ex.Message);
-			Console.Error.WriteLine ("IsTerminating is set to {0}", e.IsTerminating);
+			Logger.Write (LogLevel.Error, "Handling exception type {0}", ex.GetType ().Name);
+			Logger.Write (LogLevel.Error, "Message is {0}", ex.Message);
+			Logger.Write (LogLevel.Error, "IsTerminating is set to {0}", e.IsTerminating);
 			if (e.IsTerminating)
-				Console.Error.WriteLine (ex);
+				Logger.Write (ex);
 		}
 
 
 		public static int Main (string [] args)
 		{
 			AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
-			bool quiet = false;
-			// TODO: Understand why the while is here but commented
-			//while (true) {
 			try {
 				var svr = new Server ();
-				return svr.RealMain (args, true, null, quiet);
+				return svr.RealMain (args, true, null, false);
 			} catch (ThreadAbortException) {
 				// Single-app mode and ASP.NET appdomain unloaded
 				Thread.ResetAbort ();
-				quiet = true; // hush 'RealMain'
 			}
-			//}
 			return 1;
 		}
 
@@ -101,13 +98,18 @@ namespace Mono.WebServer.Apache {
 
 			var hash = GetHash (args);
 			if (hash == -1) {
-				Console.WriteLine ("Couldn't calculate hash - should have left earlier - something is really wrong");
+				Logger.Write(LogLevel.Error, "Couldn't calculate hash - should have left earlier - something is really wrong");
 				return 1;
 			}
 			if (hash == -2) {
-				Console.WriteLine ("Couldn't calculate hash - unrecognized parameter");
+				Logger.Write(LogLevel.Error, "Couldn't calculate hash - unrecognized parameter");
 				return 1;
 			}
+
+			if (!configurationManager.LoadConfigFile ())
+				return 1;
+
+			configurationManager.SetupLogger ();
 
 			ushort port = configurationManager.Port ?? 0;
 			bool useTCP = port != 0;
@@ -120,11 +122,14 @@ namespace Mono.WebServer.Apache {
 
 			if(configurationManager.Terminate) {
 				if (configurationManager.Verbose)
-					Console.Error.WriteLine ("Shutting down running mod-mono-server...");
+					Logger.Write (LogLevel.Notice, "Shutting down running mod-mono-server...");
 
 				bool res = webSource.GracefulShutdown ();
 				if (configurationManager.Verbose)
-					Console.Error.WriteLine (res ? "Done." : "Failed.");
+					if (res)
+						Logger.Write (LogLevel.Notice, "Done");
+					else
+						Logger.Write (LogLevel.Error, "Failed.");
 
 				return res ? 0 : 1;
 			}
@@ -134,7 +139,9 @@ namespace Mono.WebServer.Apache {
 				SingleApplication = !root
 			};
 
+#if DEBUG
 			Console.WriteLine (Assembly.GetExecutingAssembly ().GetName ().Name);
+#endif
 			if (configurationManager.Applications != null)
 				server.AddApplicationsFromCommandLine (configurationManager.Applications);
 
@@ -162,20 +169,20 @@ namespace Mono.WebServer.Apache {
 			}
 			if (!configurationManager.Quiet) {
 				if (!useTCP)
-					Console.Error.WriteLine ("Listening on: {0}", configurationManager.Filename);
+					Logger.Write (LogLevel.Notice, "Listening on: {0}", configurationManager.Filename);
 				else {
-					Console.Error.WriteLine ("Listening on port: {0}", port);
-					Console.Error.WriteLine ("Listening on address: {0}", configurationManager.Address);
+					Logger.Write (LogLevel.Notice, "Listening on port: {0}", port);
+					Logger.Write (LogLevel.Notice, "Listening on address: {0}", configurationManager.Address);
 				}
-				Console.Error.WriteLine ("Root directory: {0}", configurationManager.Root);
+				Logger.Write (LogLevel.Notice, "Root directory: {0}", configurationManager.Root);
 			}
 
 			try {
-				if (server.Start (!configurationManager.NonStop, configurationManager.Backlog) == false)
+				if (server.Start (!configurationManager.NonStop, (int)configurationManager.Backlog) == false)
 					return 2;
 
 				if (!configurationManager.NonStop) {
-					Console.Error.WriteLine ("Hit Return to stop the server.");
+					Logger.Write (LogLevel.Notice, "Hit Return to stop the server.");
 					while (true) {
 						try {
 							Console.ReadLine ();
@@ -190,7 +197,7 @@ namespace Mono.WebServer.Apache {
 				}
 			} catch (Exception e) {
 				if (!(e is ThreadAbortException))
-					Console.Error.WriteLine ("Error: {0}", e.Message);
+					Logger.Write (e);
 				else
 					server.ShutdownSockets ();
 				return 1;

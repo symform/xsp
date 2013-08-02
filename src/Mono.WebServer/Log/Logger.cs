@@ -27,91 +27,34 @@
 //
 
 using System;
-using System.IO;
 using System.Globalization;
-using Mono.WebServer.FastCgi;
+using System.Diagnostics;
 
-namespace Mono.FastCgi {
-	[Flags]
-	public enum LogLevel
+namespace Mono.WebServer.Log {
+	public static class Logger
 	{
-		None     = 0x00,
-		
-		Error    = 0x01,
-		
-		Warning  = 0x02,
-		
-		Notice   = 0x04,
-		
-		Debug    = 0x08,
-		
-		Standard = Error | Warning | Notice,
-		
-		All     = Error | Warning | Notice | Debug
-	}
-	
-	
-	
-	public class Logger
-	{
-		#region Private Fields
-		
-		StreamWriter writer;
-		
-		bool write_to_console;
-		
-		LogLevel level = LogLevel.Standard;
-		
-		readonly object write_lock = new object ();
-		
-		static readonly Logger logger = new Logger ();
-		
-		#endregion
-		
-		
-		
-		#region Private Methods
-		
-		~Logger ()
-		{
-			Close ();
-		}
-		
-		#endregion
-		
-		
-		
+		static readonly FileLogger logger = new FileLogger ();
+
+		static readonly object write_lock = new object ();
+
 		#region Public Static Properties
-		
-		public static LogLevel Level {
-			get {return logger.level;}
-			set {logger.level = value;}
-		}
-		
-		public static bool WriteToConsole {
-			get {return logger.write_to_console;}
-			set {logger.write_to_console = value;}
-		}
-		
+
+		public static LogLevel Level { get; set; }
+
+		public static bool WriteToConsole { get; set; }
+
 		#endregion
 		
-		
+		static Logger ()
+		{
+			Level = LogLevel.Standard;
+		}
 		
 		#region Public Static Methods
 		
 		public static void Open (string path)
 		{
-			if (path == null)
-				throw new ArgumentNullException ("path");
-			
-			lock (logger.write_lock) {
-				Close ();
-				Stream stream = File.Open (path,
-					FileMode.Append, FileAccess.Write,
-					FileShare.ReadWrite);
-				stream.Seek (0, SeekOrigin.End);
-				logger.writer = new StreamWriter (stream);
-			}
+			logger.Open (path);
 		}
 		
 		public static void Write (LogLevel level,
@@ -131,48 +74,28 @@ namespace Mono.FastCgi {
 		{
 			Write (LogLevel.Error, e.Message);
 			if(e.StackTrace != null)
-				Write (LogLevel.Error, e.StackTrace);
+				foreach(var line in e.StackTrace.Split(new []{Environment.NewLine}, StringSplitOptions.RemoveEmptyEntries))
+					Write (LogLevel.Error, line);
 		}
 
 		public static void Write (LogLevel level, string message)
 		{
-			if (logger.writer == null && !logger.write_to_console)
-				return;
-			
 			if ((Level & level) == LogLevel.None)
 				return;
-			
+
 			string text = String.Format (CultureInfo.CurrentCulture,
-				Strings.Logger_Format,
-				DateTime.Now,
-				level,
-				message);
-			
-			lock (logger.write_lock) {
-				if (logger.write_to_console)
-					Console.WriteLine (text);
-				
-				if (logger.writer != null) {
-					logger.writer.WriteLine (text);
-					logger.writer.Flush ();
-				}
-			}
+				"[{0:u}] {1,-7} {2}", DateTime.Now, level, message);
+
+			if (WriteToConsole)
+				lock(write_lock)
+					Console.WriteLine (message);
+
+			logger.Write (level, text);
 		}
 		
 		public static void Close ()
 		{
-			lock (logger.write_lock) {
-				if (logger.writer == null)
-					return;
-				
-				try {
-					logger.writer.Flush ();
-					logger.writer.Close ();
-				} catch (ObjectDisposedException) {
-					// Already done
-				}
-				logger.writer = null;
-			}
+			logger.Close ();
 		}
 		
 		#endregion
